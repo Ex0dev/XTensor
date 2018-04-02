@@ -49,9 +49,9 @@ struct Device
 		m_swapChain.Reset();
 	}
 
-	const auto& GetDevice() const { return m_device; }
-	const auto& GetDeviceContext() const { return m_deviceContext; }
-	const auto& GetSwapChain() const { return m_swapChain; }
+	auto GetDevice() const { return m_device; }
+	auto GetDeviceContext() const { return m_deviceContext; }
+	auto GetSwapChain() const { return m_swapChain; }
 
 	int width;
 	int height;

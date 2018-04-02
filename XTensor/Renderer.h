@@ -53,9 +53,9 @@ struct Renderer
 		m_dsv.Reset();
 	}
 
-	const auto& GetRenderTargetView() const { return m_rtv; }
-	const auto& GetDepthStencilView() const { return m_dsv; }
-	const auto& GetDeviceContext() const { return m_context; }
+	auto GetRenderTargetView() const { return m_rtv; }
+	auto GetDepthStencilView() const { return m_dsv; }
+	auto GetDeviceContext() const { return m_context; }
 
 private:
 	ComPtr<ID3D11RenderTargetView> m_rtv;
