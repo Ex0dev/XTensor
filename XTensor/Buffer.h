@@ -28,10 +28,10 @@ struct Buffer
 		data.pSysMem = vertices.data();
 
 		device.GetDevice()->CreateBuffer(&bufferDesc, &data, buffer.GetAddressOf());
-		
-		const auto id = GetNextId();
+
+		const auto id = m_nextId;
 		m_buffers[id] = buffer;
-		BindVertexBuffer<T>(device.GetDeviceContext(), id);
+		m_nextId = GetNextId();
 		return id;
 	}
 
@@ -48,10 +48,10 @@ struct Buffer
 		data.pSysMem = indices.data();
 
 		device.GetDevice()->CreateBuffer(&bufferDesc, &data, buffer.GetAddressOf());
-		
-		const auto id = GetNextId();
+
+		const auto id = m_nextId;
 		m_buffers[id] = buffer;
-		BindIndexBuffer(device.GetDeviceContext(), id);
+		m_nextId = GetNextId();
 		return id;
 	}
 
@@ -63,100 +63,131 @@ struct Buffer
 		cbbd.Usage = D3D11_USAGE_DEFAULT;
 		cbbd.ByteWidth = byteWidth;
 		cbbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-		
+
 		device.GetDevice()->CreateBuffer(&cbbd, nullptr, buffer.GetAddressOf());
-		
-		const auto id = GetNextId();
+
+		const auto id = m_nextId;
 		m_buffers[id] = buffer;
-		BindConstantBuffer(device.GetDeviceContext(), id);
+		m_nextId = GetNextId();
 		return id;
 	}
 
 	// TODO: Encapsulate all binds/unbinds to 1 function each
 	// void ID3D11Buffer::GetDesc(D3D11_BUFFER_DESC*)
 	template <typename T>
-	static void BindVertexBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
+	static void BindBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
 	{
-		assert(m_buffers.find(id) != m_buffers.end(), "Could not bind vertex buffer: " + std::string(id) +
-			". Buffer does not exist.");
-		assert(m_vertexBinds.size() <= D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, "Can not bind vertex buffer: " +
-			std::string(id) + ". Too many buffers bound.");
-		if (m_vertexBinds.find(id) == m_vertexBinds.end())
+		if (m_buffers.find(id) != m_buffers.end())
 		{
-			UINT stride = sizeof(T);
-			UINT offset = 0;
-			m_vertexBinds[id] = m_buffers[id].Get();
-			context->IASetVertexBuffers(m_vertexBinds.size(), 1, m_buffers[id].GetAddressOf(), &stride, &offset);
+			D3D11_BUFFER_DESC desc{};
+			m_buffers[id]->GetDesc(&desc);
+			if (desc.BindFlags == D3D11_BIND_VERTEX_BUFFER)
+			{
+				const auto iter = std::find(m_vertexBinds.begin(), m_vertexBinds.end(), id);
+				if (iter == m_vertexBinds.end())
+				{
+					static UINT stride = sizeof(T);
+					static UINT offset = 0;
+					context->IASetVertexBuffers(m_vertexBinds.size(), 1, m_buffers[id].GetAddressOf(), &stride, &offset);
+					m_vertexBinds.push_back(id);
+				}
+			}
+			else
+			{
+				BindBuffer(context, id);
+			}
 		}
 	}
 
-	static void UnbindVertexBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
+	static void BindBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
 	{
-		const auto iter = m_vertexBinds.find(id);
-		if (iter != m_vertexBinds.end())
+		if (m_buffers.find(id) != m_buffers.end())
 		{
-			const auto slot = std::distance(m_vertexBinds.begin(), iter);
-			context->IASetVertexBuffers(slot, 1, nullptr, nullptr, nullptr);
-			m_vertexBinds.erase(id);
+			D3D11_BUFFER_DESC desc{};
+			m_buffers[id]->GetDesc(&desc);
+			if (desc.BindFlags == D3D11_BIND_VERTEX_BUFFER)
+			{
+				assert(false, "Need to specify per vertex type.");
+			}
+			else if (desc.BindFlags == D3D11_BIND_INDEX_BUFFER)
+			{
+				if (m_indexBind != id)
+				{
+					m_indexBind = id;
+					context->IASetIndexBuffer(m_buffers[id].Get(), DXGI_FORMAT_R32_UINT, 0);
+				}
+			}
+			else if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER)
+			{
+				const auto iter = std::find(m_constantBinds.begin(), m_constantBinds.end(), id);
+				if (iter == m_constantBinds.end())
+				{
+					context->VSSetConstantBuffers(m_constantBinds.size(), 1, m_buffers[id].GetAddressOf());
+					m_constantBinds.push_back(id);
+				}
+			}
+			else
+			{
+				assert(false, "Invalid buffer.");
+			}
 		}
 	}
 
-	static void BindIndexBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
+	static void UnbindBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
 	{
-		assert(m_buffers.find(id) != m_buffers.end(), "Could not bind index buffer: " + std::string(id) +
-			". Buffer does not exist.");
-		if (id != m_indexBind)
+		if (m_buffers.find(id) == m_buffers.end())
 		{
-			m_indexBind = id;
-			context->IASetIndexBuffer(m_buffers[id].Get(), DXGI_FORMAT_R32_UINT, 0);
-		}
-	}
-
-	static void UnbindIndexBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id) throw()
-	{
-		if (id == m_indexBind)
-		{
-			context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R32_UINT, 0);
-			m_indexBind = 0;
-		}
-	}
-
-	static void BindConstantBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
-	{
-		assert(m_buffers.find(id) != m_buffers.end(), "Could not bind constant buffer: " + std::string(id) +
-			". Buffer does not exist.");
-		assert(m_constantBinds.size() <= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, "Can not bind constant buffer: " +
-			std::string(id) + ". Too many buffers bound.");
-		if (m_constantBinds.find(id) == m_constantBinds.end())
-		{
-			m_constantBinds[id] = m_buffers[id].Get();
-			context->VSSetConstantBuffers(m_constantBinds.size(), 1, m_buffers[id].GetAddressOf());
-		}
-	}
-
-
-	static void UnbindConstantBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
-	{
-		const auto iter = m_constantBinds.find(id);
-		if (iter != m_constantBinds.end())
-		{
-			const auto slot = std::distance(m_constantBinds.begin(), iter);
-			context->IASetVertexBuffers(slot, 1, nullptr, nullptr, nullptr);
-			m_constantBinds.erase(iter);
+			D3D11_BUFFER_DESC desc{};
+			m_buffers[id]->GetDesc(&desc);
+			if (desc.BindFlags == D3D11_BIND_VERTEX_BUFFER)
+			{
+				const auto iter = std::find(m_constantBinds.begin(), m_constantBinds.end(), id);
+				if (iter != m_vertexBinds.end())
+				{
+					const auto slot = std::distance(m_constantBinds.begin(), iter);
+					// TODO: Figure out how to unbind vertex buffers efficiently
+					m_vertexBinds.erase(iter);
+				}
+			}
+			else if (desc.BindFlags == D3D11_BIND_INDEX_BUFFER)
+			{
+				if (m_indexBind == id)
+				{
+					m_indexBind = 0;
+					context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R32_UINT, 0);
+				}
+			}
+			else if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER)
+			{
+				const auto iter = std::find(m_constantBinds.begin(), m_constantBinds.end(), id);
+				if (iter != m_constantBinds.end())
+				{
+					const auto slot = std::distance(m_constantBinds.begin(), iter);
+					context->VSSetConstantBuffers(slot, 1, nullptr);
+					m_constantBinds.erase(iter);
+				}
+			}
+			else
+			{
+				assert(false, "Invalid buffer.");
+			}
 		}
 	}
 
 	// TODO: Make it unbind buffer before deleting
-	static void DeleteBuffer(const ComPtr<ID3D11DeviceContext>& context, const BufferId id)
+	static void DeleteBuffer(const ComPtr<ID3D11DeviceContext>& context, BufferId& id)
 	{
-		UnbindVertexBuffer(context, id);
-		UnbindConstantBuffer(context, id);
-		UnbindIndexBuffer(context, id);
+		UnbindBuffer(context, id);
 
 		if (m_buffers.find(id) != m_buffers.end())
 		{
 			m_buffers[id].Reset();
 			m_buffers.erase(id);
+
+			if (m_buffers.find(m_nextId) != m_buffers.end() ||
+				m_nextId > id)
+				m_nextId = id;
+			id = 0;
 		}
 	}
 
@@ -170,9 +201,10 @@ struct Buffer
 private:
 	static BufferId GetNextId()
 	{
-		if (m_buffers.find(++m_currentId) != m_buffers.end())
-			m_currentId = m_buffers.rbegin()->first + 1;
-		return m_currentId;
+		auto id = m_nextId + 1;
+		while (m_buffers.find(id) != m_buffers.end())
+			++id;
+		return id;
 	}
 
 private:
@@ -187,16 +219,16 @@ private:
 	 * REMARK: Staging buffer must have identical dimensions
 	 * https://msdn.microsoft.com/en-us/library/windows/desktop/ff476899(v=vs.85).aspx#Remarks 
 	 */
-	static BufferId m_currentId;
+	static BufferId m_nextId;
 	static std::map<BufferId, ComPtr<ID3D11Buffer>> m_buffers;
-	static std::map<BufferId, ID3D11Buffer*> m_vertexBinds;
+	static std::vector<BufferId> m_vertexBinds;
+	static std::vector<BufferId> m_constantBinds;
 	static BufferId m_indexBind;
-	static std::map<BufferId, ID3D11Buffer*> m_constantBinds;
 };
 
 // NEVER HAVE 0 AS A VALUE
-BufferId Buffer::m_currentId = 0;
+BufferId Buffer::m_nextId = 1;
 std::map<BufferId, ComPtr<ID3D11Buffer>> Buffer::m_buffers = {};
-std::map<BufferId, ID3D11Buffer*> Buffer::m_vertexBinds = {};
-std::map<BufferId, ID3D11Buffer*> Buffer::m_constantBinds = {};
+std::vector<BufferId> Buffer::m_vertexBinds = {};
+std::vector<BufferId> Buffer::m_constantBinds = {};
 BufferId Buffer::m_indexBind = 0;
